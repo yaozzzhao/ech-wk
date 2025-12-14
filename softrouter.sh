@@ -26,11 +26,11 @@ rotate_log() {
     
     # 获取文件大小（字节）
     if command -v stat >/dev/null 2>&1; then
-        # 尝试 GNU stat 格式
+        # 尝试 GNU stat 格式和 BSD stat 格式
         LOG_SIZE=$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null)
     else
-        # 使用 ls 作为备用方案
-        LOG_SIZE=$(ls -l "$LOG_FILE" | awk '{print $5}')
+        # 使用 wc 作为备用方案（更可靠）
+        LOG_SIZE=$(wc -c < "$LOG_FILE" 2>/dev/null)
     fi
     
     # 如果日志文件大于100MB，则轮转
@@ -267,7 +267,8 @@ rotate_log() {
     if command -v stat >/dev/null 2>&1; then
         LOG_SIZE=$(stat -c%s "$LOG" 2>/dev/null || stat -f%z "$LOG" 2>/dev/null)
     else
-        LOG_SIZE=$(ls -l "$LOG" | awk '{print $5}')
+        # 使用 wc 作为备用方案（更可靠）
+        LOG_SIZE=$(wc -c < "$LOG" 2>/dev/null)
     fi
     
     # 如果日志文件大于100MB，则轮转
@@ -314,7 +315,7 @@ After=network.target
 Type=simple
 EnvironmentFile=$CONF_FILE
 # 在启动前轮转日志（如果超过大小限制）
-ExecStartPre=/bin/sh -c 'LOG_MAX_SIZE=\$((100 * 1024 * 1024)); if [ -f "$LOG_FILE" ]; then LOG_SIZE=\$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null || echo 0); if [ "\$LOG_SIZE" -gt "\$LOG_MAX_SIZE" ]; then rm -f "${LOG_FILE}.old"; mv "$LOG_FILE" "${LOG_FILE}.old"; fi; fi'
+ExecStartPre=/bin/sh -c 'LOG_MAX_SIZE=\$((100 * 1024 * 1024)); if [ -f "$LOG_FILE" ]; then LOG_SIZE=\$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null || wc -c < "$LOG_FILE" 2>/dev/null); if [ -n "\$LOG_SIZE" ] && [ "\$LOG_SIZE" -gt "\$LOG_MAX_SIZE" ]; then rm -f "${LOG_FILE}.old"; mv "$LOG_FILE" "${LOG_FILE}.old"; touch "$LOG_FILE"; fi; fi'
 # 使用标准输出到文件，Systemd v236+ 支持 StandardOutput=append:
 # 为了兼容老版本，这里还是使用 sh -c 包装
 ExecStart=/bin/sh -c "exec $BIN_PATH -f \${SERVER_ADDR} -l \${LISTEN_ADDR} -token \${TOKEN} -ip \${BEST_IP} -dns \${DNS} -ech \${ECH_DOMAIN} -routing \${ROUTING} >> $LOG_FILE 2>&1"
