@@ -7,6 +7,7 @@ BIN_PATH="/usr/bin/ech-workers"
 CONF_FILE="/etc/ech-workers.conf"
 TMP_DIR="/tmp/ech-workers"
 LOG_FILE="/tmp/ech-workers.log"  # 定义日志文件路径
+LOG_MAX_SIZE=$((100 * 1024 * 1024))  # 100MB in bytes
 
 # 默认配置
 DEFAULT_BEST_IP="joeyblog.net"
@@ -16,6 +17,32 @@ DEFAULT_TOKEN=""
 DEFAULT_DNS="https://dns.alidns.com/dns-query"
 DEFAULT_ECH_DOMAIN="cloudflare-ech.com"
 DEFAULT_ROUTING="global"
+
+# --- 日志轮转 ---
+rotate_log() {
+    if [ ! -f "$LOG_FILE" ]; then
+        return 0
+    fi
+    
+    # 获取文件大小（字节）
+    if command -v stat >/dev/null 2>&1; then
+        # 尝试 GNU stat 格式和 BSD stat 格式
+        LOG_SIZE=$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null)
+    else
+        # 使用 wc 作为备用方案（更可靠）
+        LOG_SIZE=$(wc -c < "$LOG_FILE" 2>/dev/null)
+    fi
+    
+    # 如果日志文件大于100MB，则轮转
+    if [ -n "$LOG_SIZE" ] && [ "$LOG_SIZE" -gt "$LOG_MAX_SIZE" ]; then
+        echo "日志文件超过100MB，正在轮转..."
+        # 删除旧的备份，将当前日志重命名为备份
+        rm -f "${LOG_FILE}.old"
+        mv "$LOG_FILE" "${LOG_FILE}.old"
+        # 创建新的空日志文件
+        touch "$LOG_FILE"
+    fi
+}
 
 # --- 系统检测 ---
 check_sys() {
@@ -229,6 +256,28 @@ STOP=10
 BIN="/usr/bin/ech-workers"
 CONF="/etc/ech-workers.conf"
 LOG="/tmp/ech-workers.log"
+LOG_MAX_SIZE=$((100 * 1024 * 1024))  # 100MB in bytes
+
+rotate_log() {
+    if [ ! -f "$LOG" ]; then
+        return 0
+    fi
+    
+    # 获取文件大小（字节）
+    if command -v stat >/dev/null 2>&1; then
+        LOG_SIZE=$(stat -c%s "$LOG" 2>/dev/null || stat -f%z "$LOG" 2>/dev/null)
+    else
+        # 使用 wc 作为备用方案（更可靠）
+        LOG_SIZE=$(wc -c < "$LOG" 2>/dev/null)
+    fi
+    
+    # 如果日志文件大于100MB，则轮转
+    if [ -n "$LOG_SIZE" ] && [ "$LOG_SIZE" -gt "$LOG_MAX_SIZE" ]; then
+        rm -f "${LOG}.old"
+        mv "$LOG" "${LOG}.old"
+        touch "$LOG"
+    fi
+}
 
 start_service() {
     [ -x "$BIN" ] || return 1
@@ -237,6 +286,9 @@ start_service() {
     : "${ECH_DOMAIN:=cloudflare-ech.com}"
     : "${ROUTING:=global}"
 
+    # 轮转日志（如果超过大小限制）
+    rotate_log
+    
     # 确保日志文件存在
     touch "$LOG"
 
@@ -262,6 +314,8 @@ After=network.target
 [Service]
 Type=simple
 EnvironmentFile=$CONF_FILE
+# 在启动前轮转日志（如果超过大小限制）
+ExecStartPre=/bin/sh -c 'LOG_MAX_SIZE=\$((100 * 1024 * 1024)); if [ -f "$LOG_FILE" ]; then LOG_SIZE=\$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null || wc -c < "$LOG_FILE" 2>/dev/null); if [ -n "\$LOG_SIZE" ] && [ "\$LOG_SIZE" -gt "\$LOG_MAX_SIZE" ]; then rm -f "${LOG_FILE}.old"; mv "$LOG_FILE" "${LOG_FILE}.old"; touch "$LOG_FILE"; fi; fi'
 # 使用标准输出到文件，Systemd v236+ 支持 StandardOutput=append:
 # 为了兼容老版本，这里还是使用 sh -c 包装
 ExecStart=/bin/sh -c "exec $BIN_PATH -f \${SERVER_ADDR} -l \${LISTEN_ADDR} -token \${TOKEN} -ip \${BEST_IP} -dns \${DNS} -ech \${ECH_DOMAIN} -routing \${ROUTING} >> $LOG_FILE 2>&1"
@@ -278,6 +332,9 @@ EOF
 
 # 服务控制
 svc_restart() {
+    # 轮转日志（如果超过大小限制）
+    rotate_log
+    
     if [ "$INIT_TYPE" = "procd" ]; then
         # OpenWrt: 分开执行 stop 和 start，并隐藏 stop 的报错 (针对首次运行)
         /etc/init.d/ech-workers stop >/dev/null 2>&1
